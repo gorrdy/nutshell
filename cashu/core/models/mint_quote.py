@@ -1,6 +1,6 @@
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from cashu.core.base import MintQuote
 from cashu.core.constants import MAX_INVOICE_DESC_LEN, MAX_PUBKEY_LEN, MAX_UNIT_LEN
@@ -8,7 +8,7 @@ from cashu.core.constants import MAX_INVOICE_DESC_LEN, MAX_PUBKEY_LEN, MAX_UNIT_
 
 class PostMintQuoteRequest(BaseModel):
     unit: str = Field(..., max_length=MAX_UNIT_LEN)  # output unit
-    amount: int = Field(..., gt=0)  # output amount
+    amount: StrictInt = Field(..., gt=0)  # output amount; StrictInt to reject "100" string coercion
     description: Optional[str] = Field(
         default=None, max_length=MAX_INVOICE_DESC_LEN
     )  # invoice description

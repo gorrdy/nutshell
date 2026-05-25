@@ -1,13 +1,13 @@
 from typing import List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from cashu.core.base import BlindedSignature, MeltQuote
 from cashu.core.constants import MAX_PAYMENT_REQUEST_LEN, MAX_UNIT_LEN
 
 
 class PostMeltRequestOptionMpp(BaseModel):
-    amount: int = Field(gt=0)  # input amount
+    amount: StrictInt = Field(gt=0)  # input amount; StrictInt to reject string coercion
 
 
 class PostMeltRequestOptions(BaseModel):

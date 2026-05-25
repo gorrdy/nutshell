@@ -59,31 +59,35 @@ class DbWriteHelper:
         Raises:
             TransactionError: If any one of the proofs is already spent or pending.
         """
-        # first we check whether these proofs are pending already
+        # Per-Y serialization via the UNIQUE constraint on proofs_pending.y
+        # replaces the old global LOCK TABLE: independent proofs can flow
+        # through concurrently, only swaps sharing a proof contend.
         try:
-            logger.trace("_verify_spent_proofs_and_set_pending acquiring lock")
-            async with self.db.get_connection(
-                lock_table="proofs_pending",
-                lock_timeout=1,
-                conn=conn,
-            ) as conn:
-                logger.trace("checking whether proofs are already spent")
-                await self.db_read._verify_proofs_spendable(proofs, conn)
-                logger.trace("checking whether proofs are already pending")
-                await self._validate_proofs_pending(proofs, conn)
+            async with self.db.get_connection(conn=conn) as conn:
+                # 1. Insert each proof into proofs_pending. ON CONFLICT (y)
+                #    DO NOTHING means: if any other in-flight transaction
+                #    already holds Y as pending, set_proof_pending returns
+                #    False here and we abort (rolling back any rows we
+                #    already inserted in this txn).
                 for p in proofs:
-                    logger.trace(f"crud: setting proof {p.Y} as PENDING")
-                    await self.crud.set_proof_pending(
+                    inserted = await self.crud.set_proof_pending(
                         proof=p, db=self.db, quote_id=quote_id, conn=conn
                     )
+                    if not inserted:
+                        raise ProofsArePendingError()
+                # 2. With Y reserved in proofs_pending, check that nothing
+                #    has already been moved to proofs_used. Any
+                #    ProofSpentError here rolls back our pending inserts
+                #    above as part of the same transaction.
+                await self.db_read._verify_proofs_spendable(proofs, conn)
+                # 3. Bump per-keyset balance counter.
+                for p in proofs:
                     await self.crud.bump_keyset_balance(
                         db=self.db,
                         keyset=keysets[p.id],
                         amount=-p.amount,
                         conn=conn,
                     )
-                    logger.trace(f"crud: set proof {p.Y} as PENDING")
-            logger.trace("_verify_spent_proofs_and_set_pending released lock")
         except Exception as e:
             logger.error(f"Failed to set proofs pending: {e}")
             raise e
@@ -455,10 +459,7 @@ class DbWriteHelper:
         Returns:
             MeltQuote: Updated melt quote object.
         """
-        async with self.db.get_connection(
-            lock_table="proofs_pending",
-            lock_timeout=1,
-        ) as conn:
+        async with self.db.get_connection() as conn:
             await self._verify_spent_proofs_and_set_pending(
                 proofs, keysets, quote_id=quote.quote, conn=conn
             )
@@ -481,10 +482,7 @@ class DbWriteHelper:
             keysets (Dict[str, MintKeyset]): Keysets for updating balances.
             state (MeltQuoteState): New state for the melt quote (e.g. UNPAID).
         """
-        async with self.db.get_connection(
-            lock_table="proofs_pending",
-            lock_timeout=1,
-        ) as conn:
+        async with self.db.get_connection() as conn:
             await self._unset_proofs_pending(proofs, keysets, spent=False, conn=conn)
             quote = await self._unset_melt_quote_pending(quote, state, conn=conn)
             # Clean up blinded messages associated with this melt
@@ -559,10 +557,7 @@ class DbWriteHelper:
         """
         quote_copy = quote.model_copy()
 
-        async with self.db.get_connection(
-            lock_table="proofs_pending",
-            lock_timeout=1,
-        ) as conn:
+        async with self.db.get_connection() as conn:
             # 1. Unset proofs PENDING
             # This bumps balance back up.
             await self._unset_proofs_pending(proofs, keysets, spent=True, conn=conn)

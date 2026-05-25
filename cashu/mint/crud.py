@@ -94,7 +94,7 @@ class LedgerCrud(ABC):
         proof: Proof,
         quote_id: Optional[str] = None,
         conn: Optional[Connection] = None,
-    ) -> None: ...
+    ) -> bool: ...
 
     @abstractmethod
     async def unset_proof_pending(
@@ -566,12 +566,18 @@ class LedgerCrudSqlite(LedgerCrud):
         proof: Proof,
         quote_id: Optional[str] = None,
         conn: Optional[Connection] = None,
-    ) -> None:
-        await (conn or db).execute(
+    ) -> bool:
+        # ON CONFLICT (y) DO NOTHING + RETURNING gives us per-Y serialization
+        # via the existing UNIQUE constraint, with no need for a table lock.
+        # Returns True if the row was inserted, False if another transaction
+        # already holds Y pending.
+        result = await (conn or db).execute(
             f"""
             INSERT INTO {db.table_with_schema("proofs_pending")}
             (amount, c, secret, y, id, witness, created, melt_quote)
             VALUES (:amount, :c, :secret, :y, :id, :witness, :created, :melt_quote)
+            ON CONFLICT (y) DO NOTHING
+            RETURNING y
             """,
             {
                 "amount": proof.amount,
@@ -584,6 +590,8 @@ class LedgerCrudSqlite(LedgerCrud):
                 "melt_quote": quote_id,
             },
         )
+        row = result.fetchone()
+        return row is not None
 
     async def unset_proof_pending(
         self,

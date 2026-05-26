@@ -884,13 +884,7 @@ class Ledger(
                     )
                     melt_quote.change = return_promises
 
-                # Calculate fees
-                proofs_by_keyset: Dict[str, List[Proof]] = {}
-                for p in pending_proofs:
-                    proofs_by_keyset.setdefault(p.id, []).append(p)
-                keyset_fees = {}
-                for keyset_id, keyset_proofs in proofs_by_keyset.items():
-                    keyset_fees[keyset_id] = self.get_fees_for_proofs(keyset_proofs)
+                keyset_fees = self._keyset_fees_for_proofs(pending_proofs)
 
                 melt_quote = (
                     await self.db_write.set_melt_quote_paid_and_invalidate_proofs(
@@ -1204,13 +1198,7 @@ class Ledger(
 
         melt_quote.change = return_promises
 
-        # Calculate fees
-        proofs_by_keyset: Dict[str, List[Proof]] = {}
-        for p in proofs:
-            proofs_by_keyset.setdefault(p.id, []).append(p)
-        keyset_fees = {}
-        for keyset_id, keyset_proofs in proofs_by_keyset.items():
-            keyset_fees[keyset_id] = self.get_fees_for_proofs(keyset_proofs)
+        keyset_fees = self._keyset_fees_for_proofs(proofs)
 
         melt_quote = await self.db_write.set_melt_quote_paid_and_invalidate_proofs(
             quote=melt_quote,
@@ -1259,13 +1247,7 @@ class Ledger(
             ) as conn:
                 await self._store_blinded_messages(outputs, keyset=keyset, conn=conn)
 
-                # Calculate fees
-                proofs_by_keyset: Dict[str, List[Proof]] = {}
-                for p in proofs:
-                    proofs_by_keyset.setdefault(p.id, []).append(p)
-                keyset_fees = {}
-                for keyset_id, keyset_proofs in proofs_by_keyset.items():
-                    keyset_fees[keyset_id] = self.get_fees_for_proofs(keyset_proofs)
+                keyset_fees = self._keyset_fees_for_proofs(proofs)
 
                 await self.db_write.invalidate_proofs(
                     proofs=proofs,

@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional, Tuple, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 from loguru import logger
 
@@ -260,20 +260,6 @@ class LedgerVerification(
             return False
         return True
 
-    def _verify_inputs_outputs_units_match(
-        self, proofs: List[Proof], outputs: List[BlindedMessage]
-    ) -> bool:
-        """Verifies that the units of the inputs and outputs match."""
-        units_proofs = [self.keysets[p.id].unit for p in proofs]
-        units_outputs = [self.keysets[o.id].unit for o in outputs]
-        if not len(set(units_proofs)) == 1:
-            raise TransactionMultipleUnitsError("inputs have different units.")
-        if not len(set(units_outputs)) == 1:
-            raise TransactionMultipleUnitsError("outputs have different units.")
-        if not units_proofs[0] == units_outputs[0]:
-            raise TransactionUnitMismatchError()
-        return True
-
     def _verify_amount(self, amount: int) -> int:
         """Any amount used should be positive and not larger than 2^MAX_ORDER."""
         valid = amount > 0 and amount < 2**settings.max_order
@@ -302,6 +288,16 @@ class LedgerVerification(
             raise TransactionUnitError("inputs have different units.")
         fee = (sum([self.keysets[p.id].input_fee_ppk for p in proofs]) + 999) // 1000
         return fee
+
+    def _keyset_fees_for_proofs(self, proofs: List[Proof]) -> Dict[str, int]:
+        """Group proofs by keyset id and compute the fee for each group."""
+        proofs_by_keyset: Dict[str, List[Proof]] = {}
+        for p in proofs:
+            proofs_by_keyset.setdefault(p.id, []).append(p)
+        return {
+            keyset_id: self.get_fees_for_proofs(keyset_proofs)
+            for keyset_id, keyset_proofs in proofs_by_keyset.items()
+        }
 
     def _verify_equation_balanced(
         self,

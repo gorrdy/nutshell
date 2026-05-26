@@ -208,7 +208,7 @@ def test_verify_input_output_amounts_accepts_equal_or_greater(ledger: Ledger):
 
 
 # ---------------------------------------------------------------------------
-# _verify_units_match and _verify_inputs_outputs_units_match
+# _verify_units_match
 # ---------------------------------------------------------------------------
 
 
@@ -233,17 +233,7 @@ def test_verify_units_match_rejects_mismatched_units(ledger: Ledger):
         ledger.keysets = orig
 
 
-def test_verify_inputs_outputs_units_match(ledger: Ledger):
-    kid = ledger.keyset.id
-    proofs = [
-        Proof(id=kid, amount=8, secret="a", C="02" + "12" * 32),
-        Proof(id=kid, amount=8, secret="b", C="02" + "13" * 32),
-    ]
-    outs = [_blinded_output(ledger, label="x"), _blinded_output(ledger, label="y")]
-    assert ledger._verify_inputs_outputs_units_match(proofs, outs) is True
-
-
-def test_verify_inputs_outputs_units_match_rejects_multi_unit_inputs(ledger: Ledger):
+def test_verify_units_match_rejects_multi_unit_inputs(ledger: Ledger):
     orig = dict(ledger.keysets)
     try:
         ks_a = MagicMock(unit=Unit.sat)
@@ -253,7 +243,7 @@ def test_verify_inputs_outputs_units_match_rejects_multi_unit_inputs(ledger: Led
         pb = Proof(id="kb", amount=8, secret="b", C="02" + "15" * 32)
         o = BlindedMessage(amount=8, B_="02" + "16" * 32, id="ka")
         with pytest.raises(TransactionMultipleUnitsError, match="inputs"):
-            ledger._verify_inputs_outputs_units_match([pa, pb], [o])
+            ledger._verify_units_match([pa, pb], [o])
     finally:
         ledger.keysets = orig
 

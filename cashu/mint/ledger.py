@@ -1365,6 +1365,7 @@ class Ledger(
         keyset = keyset or self.keyset
 
         signatures = []
+        deltas: Dict[str, int] = {}
         async with self.db.get_connection(conn) as conn:
             for promise in promises:
                 keyset_id, B_, amount, C_, e, s = promise
@@ -1379,17 +1380,17 @@ class Ledger(
                     conn=conn,
                 )
                 logger.trace(f"crud: _generate_promise stored promise for {amount}")
-                signature = BlindedSignature(
-                    id=keyset_id,
-                    amount=amount,
-                    C_=C_.format().hex(),
-                    dleq=DLEQ(e=e.to_hex(), s=s.to_hex()),
+                signatures.append(
+                    BlindedSignature(
+                        id=keyset_id,
+                        amount=amount,
+                        C_=C_.format().hex(),
+                        dleq=DLEQ(e=e.to_hex(), s=s.to_hex()),
+                    )
                 )
-                signatures.append(signature)
+                deltas[keyset_id] = deltas.get(keyset_id, 0) + amount
 
-                # bump keyset balance
-                await self.crud.bump_keyset_balance(
-                    db=self.db, keyset=self.keysets[keyset_id], amount=amount, conn=conn
-                )
-
+            await self.crud.bump_keyset_balances(
+                db=self.db, deltas=deltas, conn=conn
+            )
             return signatures

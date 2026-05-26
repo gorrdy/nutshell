@@ -143,6 +143,15 @@ class LedgerCrud(ABC):
     ) -> None: ...
 
     @abstractmethod
+    async def bump_keyset_balances(
+        self,
+        *,
+        db: Database,
+        deltas: Dict[str, int],
+        conn: Optional[Connection] = None,
+    ) -> None: ...
+
+    @abstractmethod
     async def bump_keyset_fees_paid(
         self,
         *,
@@ -959,6 +968,29 @@ class LedgerCrudSqlite(LedgerCrud):
             """,
             {"amount": amount, "id": keyset.id},
         )
+
+    async def bump_keyset_balances(
+        self,
+        *,
+        db: Database,
+        deltas: Dict[str, int],
+        conn: Optional[Connection] = None,
+    ) -> None:
+        """Apply aggregated balance deltas in one UPDATE per keyset, so a
+        multi-proof swap on a single active keyset becomes one UPDATE
+        instead of N — much less row-lock contention on the keysets row.
+        """
+        for keyset_id, amount in deltas.items():
+            if amount == 0:
+                continue
+            await (conn or db).execute(
+                f"""
+                UPDATE {db.table_with_schema("keysets")}
+                SET balance = balance + :amount
+                WHERE id = :id
+                """,
+                {"amount": amount, "id": keyset_id},
+            )
 
     async def bump_keyset_fees_paid(
         self,

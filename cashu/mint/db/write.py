@@ -82,13 +82,12 @@ class DbWriteHelper:
                     await self.crud.set_proof_pending(
                         proof=p, db=self.db, quote_id=quote_id, conn=conn
                     )
-                    await self.crud.bump_keyset_balance(
-                        db=self.db,
-                        keyset=keysets[p.id],
-                        amount=-p.amount,
-                        conn=conn,
-                    )
-                    logger.trace(f"crud: set proof {p.Y} as PENDING")
+                deltas: Dict[str, int] = {}
+                for p in proofs:
+                    deltas[p.id] = deltas.get(p.id, 0) - p.amount
+                await self.crud.bump_keyset_balances(
+                    db=self.db, deltas=deltas, conn=conn
+                )
             logger.trace("_verify_spent_proofs_and_set_pending released lock")
         except Exception as e:
             logger.error(f"Failed to set proofs pending: {e}")
@@ -118,12 +117,12 @@ class DbWriteHelper:
             for p in proofs:
                 logger.trace(f"crud: un-setting proof {p.Y} as PENDING")
                 await self.crud.unset_proof_pending(proof=p, db=self.db, conn=conn)
-                await self.crud.bump_keyset_balance(
-                    db=self.db,
-                    keyset=keysets[p.id],
-                    amount=p.amount,
-                    conn=conn,
-                )
+            deltas: Dict[str, int] = {}
+            for p in proofs:
+                deltas[p.id] = deltas.get(p.id, 0) + p.amount
+            await self.crud.bump_keyset_balances(
+                db=self.db, deltas=deltas, conn=conn
+            )
 
         if not spent:
             for p in proofs:
@@ -518,19 +517,18 @@ class DbWriteHelper:
             conn (Optional[Connection]): Database connection.
         """
         async with self.db.get_connection(conn) as conn:
-            # Invalidate proofs (spend them)
-            # This bumps balance down.
+            # Invalidate proofs (spend them) and bump balance down.
+            deltas: Dict[str, int] = {}
             for p in proofs:
                 logger.trace(f"Invalidating proof {p.Y}")
                 await self.crud.invalidate_proof(
                     proof=p, db=self.db, quote_id=quote_id, conn=conn
                 )
-                await self.crud.bump_keyset_balance(
-                    db=self.db,
-                    keyset=keysets[p.id],
-                    amount=-p.amount,
-                    conn=conn,
-                )
+                deltas[p.id] = deltas.get(p.id, 0) - p.amount
+            await self.crud.bump_keyset_balances(
+                db=self.db, deltas=deltas, conn=conn
+            )
+            for p in proofs:
                 await self.events.submit(
                     ProofState(
                         Y=p.Y, state=ProofSpentState.spent, witness=p.witness or None

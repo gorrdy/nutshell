@@ -87,6 +87,15 @@ class LedgerCrud(ABC):
     ) -> List[Proof]: ...
 
     @abstractmethod
+    async def get_proofs_used_or_pending_ys(
+        self,
+        *,
+        Ys: List[str],
+        db: Database,
+        conn: Optional[Connection] = None,
+    ) -> Dict[str, str]: ...
+
+    @abstractmethod
     async def set_proof_pending(
         self,
         *,
@@ -558,6 +567,37 @@ class LedgerCrudSqlite(LedgerCrud):
         values = {f"y_{i}": Ys[i] for i in range(len(Ys))}
         rows = await (conn or db).fetchall(query, values)
         return [Proof(**r) for r in rows]
+
+    async def get_proofs_used_or_pending_ys(
+        self,
+        *,
+        Ys: List[str],
+        db: Database,
+        conn: Optional[Connection] = None,
+    ) -> Dict[str, str]:
+        """Single-roundtrip lookup that returns {Y: 'spent'|'pending'} for any
+        Y present in proofs_used or proofs_pending. Used on the spend hot path
+        to replace two separate SELECTs.
+        """
+        if not Ys:
+            return {}
+        placeholders = ",".join(f":y_{i}" for i in range(len(Ys)))
+        values = {f"y_{i}": Ys[i] for i in range(len(Ys))}
+        query = f"""
+        SELECT y, 'spent' AS state FROM {db.table_with_schema("proofs_used")}
+        WHERE y IN ({placeholders})
+        UNION ALL
+        SELECT y, 'pending' AS state FROM {db.table_with_schema("proofs_pending")}
+        WHERE y IN ({placeholders})
+        """
+        rows = await (conn or db).fetchall(query, values)
+        result: Dict[str, str] = {}
+        for r in rows:
+            y, state = r["y"], r["state"]
+            # 'spent' is terminal; prefer it if a Y somehow appears in both.
+            if state == "spent" or y not in result:
+                result[y] = state
+        return result
 
     async def set_proof_pending(
         self,

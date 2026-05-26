@@ -15,6 +15,7 @@ from ...core.base import (
 )
 from ...core.db import Connection, Database
 from ...core.errors import (
+    ProofsAlreadySpentError,
     ProofsArePendingError,
     TransactionError,
 )
@@ -67,10 +68,15 @@ class DbWriteHelper:
                 lock_timeout=1,
                 conn=conn,
             ) as conn:
-                logger.trace("checking whether proofs are already spent")
-                await self.db_read._verify_proofs_spendable(proofs, conn)
-                logger.trace("checking whether proofs are already pending")
-                await self._validate_proofs_pending(proofs, conn)
+                # One SELECT for both proofs_used + proofs_pending instead of
+                # two sequential round-trips on every spend.
+                states = await self.crud.get_proofs_used_or_pending_ys(
+                    Ys=[p.Y for p in proofs], db=self.db, conn=conn
+                )
+                if states:
+                    if any(s == "spent" for s in states.values()):
+                        raise ProofsAlreadySpentError()
+                    raise ProofsArePendingError()
                 for p in proofs:
                     logger.trace(f"crud: setting proof {p.Y} as PENDING")
                     await self.crud.set_proof_pending(

@@ -263,6 +263,15 @@ class LedgerCrud(ABC):
     ) -> Optional[MintQuote]: ...
 
     @abstractmethod
+    async def get_mint_quotes_by_ids(
+        self,
+        *,
+        quote_ids: List[str],
+        db: Database,
+        conn: Optional[Connection] = None,
+    ) -> Dict[str, MintQuote]: ...
+
+    @abstractmethod
     async def get_mint_quote_by_request(
         self,
         *,
@@ -725,6 +734,26 @@ class LedgerCrudSqlite(LedgerCrud):
         if row is None:
             return None
         return MintQuote.from_row(row) if row else None  # type: ignore
+
+    async def get_mint_quotes_by_ids(
+        self,
+        *,
+        quote_ids: List[str],
+        db: Database,
+        conn: Optional[Connection] = None,
+    ) -> Dict[str, MintQuote]:
+        if not quote_ids:
+            return {}
+        placeholders = ",".join(f":q_{i}" for i in range(len(quote_ids)))
+        values = {f"q_{i}": q for i, q in enumerate(quote_ids)}
+        rows = await (conn or db).fetchall(
+            f"""
+            SELECT * FROM {db.table_with_schema("mint_quotes")}
+            WHERE quote IN ({placeholders})
+            """,
+            values,
+        )
+        return {row["quote"]: MintQuote.from_row(row) for row in rows}  # type: ignore
 
     async def get_mint_quote_by_request(
         self,

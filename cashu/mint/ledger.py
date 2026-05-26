@@ -446,19 +446,27 @@ class Ledger(
     ) -> List[MintQuote]:
         """Batch check mint quotes.
 
-        Args:
-            payload (PostMintQuoteCheckRequest): Request payload containing quote IDs.
-
-        Returns:
-            List[MintQuote]: List of mint quotes matching the request.
+        Fast path: one SELECT for every quote row. Only the still-unpaid
+        ones fall through to the slow per-quote refresh that also pokes the
+        lightning backend; those are run concurrently with asyncio.gather
+        so a batch of N stale quotes doesn't sit on N sequential RTTs.
         """
-        quotes: List[MintQuote] = []
+        fetched = await self.crud.get_mint_quotes_by_ids(
+            quote_ids=payload.quotes, db=self.db
+        )
         for quote_id in payload.quotes:
-            quote = await self.get_mint_quote(quote_id)
-            if not quote:
+            if quote_id not in fetched:
                 raise TransactionError(f"quote {quote_id} not found")
-            quotes.append(quote)
-        return quotes
+
+        unpaid_ids = [qid for qid, q in fetched.items() if q.unpaid]
+        if unpaid_ids:
+            refreshed = await asyncio.gather(
+                *(self.get_mint_quote(qid) for qid in unpaid_ids)
+            )
+            for q in refreshed:
+                fetched[q.quote] = q
+
+        return [fetched[qid] for qid in payload.quotes]
 
     async def mint(
         self,

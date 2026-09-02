@@ -65,6 +65,19 @@ class MintSettings(CashuSettings):
     mint_max_witness_length: int = Field(default=1024)
 
     mint_input_fee_ppk: int = Field(default=100)
+    mint_melt_fee_percent: float = Field(
+        default=0.0,
+        ge=0,
+        title="Melt fee percent",
+        description=(
+            "Fee in percent that the mint charges for outgoing Lightning"
+            " payments. It is taken out of the Lightning fee reserve, not on"
+            " top of it: the mint keeps what routing did not consume, capped at"
+            " this percent, and the rest is returned to the wallet as change."
+            " The quoted fee reserve therefore stays the wallet's real price."
+            " Internal payments remain free."
+        ),
+    )
     mint_disable_melt_on_error: bool = Field(default=False)
     mint_quote_ttl: Optional[int] = Field(
         default=None,

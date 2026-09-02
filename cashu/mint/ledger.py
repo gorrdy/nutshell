@@ -39,7 +39,7 @@ from ..core.errors import (
     TransactionAmountExceedsLimitError,
     TransactionError,
 )
-from ..core.helpers import sum_proofs
+from ..core.helpers import melt_fee, sum_proofs
 from ..core.models import (
     PostMeltQuoteRequest,
     PostMeltQuoteResponse,
@@ -711,6 +711,26 @@ class Ledger(
 
         return payment_quote
 
+    def get_melt_fee(self, melt_quote: MeltQuote, fee_reserve_provided: int) -> int:
+        """Returns the mint's own fee for a melt quote, in the quote's unit.
+
+        The fee comes out of the Lightning fee reserve, not on top of it: the
+        mint keeps what routing did not consume, capped at
+        `mint_melt_fee_percent` of the amount. The rest is returned to the
+        wallet as change.
+
+        Charging out of the reserve rather than above it keeps the quoted
+        `fee_reserve` the wallet's true price, so a wallet holding exactly
+        `amount + fee_reserve` can still pay. It also means the mint absorbs
+        an expensive route instead of passing it on.
+        """
+        return max(
+            0,
+            min(
+                melt_fee(melt_quote.amount), fee_reserve_provided - melt_quote.fee_paid
+            ),
+        )
+
     def validate_payment_quote(
         self, melt_quote: PostMeltQuoteRequest, payment_quote: PaymentQuoteResponse
     ):
@@ -908,7 +928,8 @@ class Ledger(
                         total_provided - melt_quote.amount - input_fees
                     )
                     return_promises = await self._generate_change_promises(
-                        fee_provided=fee_reserve_provided,
+                        fee_provided=fee_reserve_provided
+                        - self.get_melt_fee(melt_quote, fee_reserve_provided),
                         fee_paid=melt_quote.fee_paid,
                         outputs=melt_outputs,
                         melt_id=quote_id,
@@ -1168,6 +1189,8 @@ class Ledger(
         )
         input_fees = self.get_fees_for_proofs(proofs)
         fee_reserve_provided = sum_proofs(proofs) - melt_quote.amount - input_fees
+        # only an outgoing Lightning payment pays the mint's melt fee
+        paid_with_backend = False
 
         try:
             # if the melt corresponds to an internal mint, mark both as paid
@@ -1186,6 +1209,7 @@ class Ledger(
         if melt_quote.state == MeltQuoteState.pending:
             logger.debug(f"Lightning: pay invoice {melt_quote.request}")
             try:
+                paid_with_backend = True
                 fee_limit_msat = (
                     Amount(Unit[melt_quote.unit], melt_quote.fee_reserve)
                     .to(Unit.msat)
@@ -1278,10 +1302,18 @@ class Ledger(
 
         # melt was successful (either internal or via backend), invalidate proofs
         # prepare change to compensate wallet for overpaid fees
+        # the mint keeps its melt fee out of the reserve; internal payments
+        # never touch Lightning and stay free
+        mint_melt_fee = (
+            self.get_melt_fee(melt_quote, fee_reserve_provided)
+            if paid_with_backend
+            else 0
+        )
+
         return_promises: List[BlindedSignature] = []
         if outputs:
             return_promises = await self._generate_change_promises(
-                fee_provided=fee_reserve_provided,
+                fee_provided=fee_reserve_provided - mint_melt_fee,
                 fee_paid=melt_quote.fee_paid,
                 outputs=outputs,
                 melt_id=melt_quote.quote,

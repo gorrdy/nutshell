@@ -48,7 +48,7 @@ from ..core.errors import (
     TransactionAmountExceedsLimitError,
     TransactionError,
 )
-from ..core.helpers import sum_proofs
+from ..core.helpers import melt_fee, sum_proofs
 from ..core.models import (
     PostMeltQuoteRequest,
     PostMeltQuoteResponse,
@@ -347,8 +347,16 @@ class Ledger(
         *,
         fee_paid: Optional[int] = None,
         preimage: Optional[str] = None,
+        charge_melt_fee: bool = False,
     ) -> MeltQuote:
-        """Atomically issue change, spend proofs, and mark a melt quote paid."""
+        """Atomically issue change, spend proofs, and mark a melt quote paid.
+
+        `charge_melt_fee` must be True only when the payment actually left over
+        Lightning. Internal settlements never touch Lightning and stay free.
+        It defaults to False so that a call site added upstream without this
+        argument forgoes the mint's fee rather than charging a wallet for a
+        payment that never routed.
+        """
         settled_proofs: List[Proof] = []
 
         async with self.db.get_connection(
@@ -413,8 +421,13 @@ class Ledger(
                     - melt_quote.amount
                     - self.get_fees_for_proofs(settled_proofs)
                 )
+                mint_melt_fee = (
+                    self.get_melt_fee(melt_quote, fee_reserve_provided)
+                    if charge_melt_fee
+                    else 0
+                )
                 melt_quote.change = await self._generate_change_promises(
-                    fee_provided=fee_reserve_provided,
+                    fee_provided=fee_reserve_provided - mint_melt_fee,
                     fee_paid=melt_quote.fee_paid,
                     outputs=melt_outputs,
                     melt_id=quote_id,
@@ -995,6 +1008,26 @@ class Ledger(
 
         return payment_quote
 
+    def get_melt_fee(self, melt_quote: MeltQuote, fee_reserve_provided: int) -> int:
+        """Returns the mint's own fee for a melt quote, in the quote's unit.
+
+        The fee comes out of the Lightning fee reserve, not on top of it: the
+        mint keeps what routing did not consume, capped at
+        `mint_melt_fee_percent` of the amount. The rest is returned to the
+        wallet as change.
+
+        Charging out of the reserve rather than above it keeps the quoted
+        `fee_reserve` the wallet's true price, so a wallet holding exactly
+        `amount + fee_reserve` can still pay. It also means the mint absorbs
+        an expensive route instead of passing it on.
+        """
+        return max(
+            0,
+            min(
+                melt_fee(melt_quote.amount), fee_reserve_provided - melt_quote.fee_paid
+            ),
+        )
+
     def validate_payment_quote(
         self, melt_quote: PostMeltQuoteRequest, payment_quote: PaymentQuoteResponse
     ):
@@ -1146,6 +1179,7 @@ class Ledger(
                         status.fee.to(unit, round="up").amount if status.fee else None
                     ),
                     preimage=status.preimage,
+                    charge_melt_fee=True,
                 )
             case PaymentStatusResult.FAILED:
                 logger.debug(f"Setting quote {melt_quote.quote} as unpaid")
@@ -1194,6 +1228,7 @@ class Ledger(
                     quote_id,
                     fee_paid=melt_quote.fee_paid,
                     preimage=melt_quote.payment_preimage,
+                    charge_melt_fee=False,  # interrupted internal settlement
                 )
 
         # we only check the state with the backend if there is no associated internal
@@ -1479,6 +1514,7 @@ class Ledger(
                     melt_quote.quote,
                     fee_paid=melt_quote.fee_paid,
                     preimage=melt_quote.payment_preimage,
+                    charge_melt_fee=False,  # settled internally, never routed
                 )
                 return PostMeltQuoteResponse.from_melt_quote(melt_quote)
         except Exception as e:
@@ -1544,6 +1580,7 @@ class Ledger(
                         payment.fee.to(unit, round="up").amount if payment.fee else None
                     ),
                     preimage=payment.preimage,
+                    charge_melt_fee=True,
                 )
                 return PostMeltQuoteResponse.from_melt_quote(melt_quote)
 
@@ -1557,6 +1594,7 @@ class Ledger(
             melt_quote.quote,
             fee_paid=melt_quote.fee_paid,
             preimage=melt_quote.payment_preimage,
+            charge_melt_fee=True,
         )
         return PostMeltQuoteResponse.from_melt_quote(melt_quote)
 

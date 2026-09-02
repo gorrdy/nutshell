@@ -58,6 +58,18 @@ def fee_reserve(amount_msat: int) -> int:
     )
 
 
+def melt_fee(amount: int) -> int:
+    """Function for calculating the mint's own fee for an outgoing payment.
+
+    In contrast to `fee_reserve`, this fee is kept by the mint: it is not
+    offered to the backend as a routing budget and not returned to the wallet
+    as change. `amount` and the return value are in the same unit.
+    """
+    if settings.mint_melt_fee_percent <= 0:
+        return 0
+    return math.ceil(amount * settings.mint_melt_fee_percent / 100.0)
+
+
 def calculate_number_of_blank_outputs(fee_reserve_sat: int):
     """Calculates the number of blank outputs used for returning overpaid fees.
 
